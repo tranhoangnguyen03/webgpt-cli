@@ -9,6 +9,12 @@ from bs4 import BeautifulSoup
 from serpapi import GoogleSearch
 import warnings
 import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+with open('blacklist') as f:
+    black_list = f.read().splitlines()
 
 # supress warnings
 warnings.filterwarnings("ignore")
@@ -16,8 +22,8 @@ warnings.filterwarnings("ignore")
 parser = argparse.ArgumentParser(description='Use GPT-3 with multi-shot prompting to generate summaries from the web.')
 parser.add_argument('query', type=str, help='the query to generate text from')
 parser.add_argument('-m', '--model', type=str, default='text-davinci-003', help='the GPT-3 model to use')
-parser.add_argument('-t', '--temperature', type=float, default=0.8, help='the sampling temperature')
-parser.add_argument('-max', '--max-tokens', type=int, default=800, help='the maximum number of tokens to generate')
+parser.add_argument('-t', '--temperature', type=float, default=0.3, help='the sampling temperature')
+parser.add_argument('-max', '--max-tokens', type=int, default=2000, help='the maximum number of tokens to generate')
 parser.add_argument('-n', '--num-results', type=int, default=3, help='the number of results to return')
 
 # Parse the arguments
@@ -53,7 +59,7 @@ def search(query):
   results = search.get_dict()
 
   links = []
-  print(results)
+  logger.info(results)
   for i in results["organic_results"]:
       links.append(i['link'])
   
@@ -78,6 +84,57 @@ def scrape(url):
     
     return x
 
+def get_topic(query):
+    prompt = ''.join([
+        "Which artist painted the Mona Lisa?	Art",
+        "Who wrote the novel To Kill a Mockingbird?	Literature",
+        "What is the formula for calculating the area of a circle?	Mathematics",
+        "Who invented the telephone?	History/Inventions",
+        "What is the capital of Spain?	Geography",
+        "What is the atomic number of oxygen?	Chemistry",
+        "Who directed the film Titanic?	Film",
+        "Who composed the famous opera The Barber of Seville?	Music",
+        "What is the process of photosynthesis?	Biology",
+        "What is the name of the first man to walk on the moon?	History/Space Exploration",
+        "Only output the direct answer in as few words as possible:" 
+        f"The topic for this question {query} is"
+        ])
+
+    string = gpt(prompt)
+    # pattern = r"^Topic:\s(.*)$"
+    # match = re.search(pattern, string, re.MULTILINE)
+    # if match:
+    #     topic = match.group(1)
+    #     return topic
+    # else:
+    #     logger.error(f'No topic found {string}')
+    #     return None
+    logger.info(string)
+    return string
+     
+
+def get_gpt_answer(query:str):
+    topic = get_topic(query) or 'general'
+    context = ' '.join([
+        f"You are a distinguished professor in `{topic}` with well over ten years teaching.",
+        "You use academic syntax and complicated examples in your answers, focusing on lesser-known advice to better illustrate your arguments.",
+        "Your language should be sophisticated but not overly complex.",
+        "If you do not know the answer to a question, do not make information up",
+        "Your answers should be in the form of a conversational series of paragraphs.",
+        "Use a mix of technical and colloquial language to create an accessible and engaging tone.",
+        "Please answer the question below:"
+    ])
+
+    prompt = '\n\n'.join([
+        context,
+        query,
+    ])
+    return {'summary':gpt(prompt), 
+            'link':'Chat GPT',
+            'source':'Chat GPT'
+        }
+
+
 # This function uses the GPT-3 API to generate a summary
 def gpt(prompt):
     openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -91,30 +148,32 @@ with HiddenPrints():
     def process(query):
     
         links = search(query)
-        results = []
+        results = [get_gpt_answer(query)]
 
         for i in links[:args.num_results]:
 
-            txt = scrape(i)[:1000]
-            if len(txt) < 500:
-                continue
+            if i not in black_list:
 
-            prompt = """Given the following question:'"""+query+"""'
+                txt = scrape(i)[:2000]
+                if len(txt) < 500:
+                    continue
 
-            Extract the text from the following content relevant to the question and summarize in detail:
+                prompt = """Given the following question:'"""+query+"""'
 
-            '"""+txt+"""'
+                Extract the text from the following content strictly relevant to the question and summarize in detail:
 
-            Extracted summarized content:"""
+                '"""+txt+"""'
 
-            a = {
-                'query': query,
-                'link': i,
-                'text': txt,
-                'summary': gpt(prompt).strip()
-            }
-            
-            results.append(a)
+                Extracted summarized content:"""
+
+                a = {
+                    'query': query,
+                    'link': i,
+                    'text': txt,
+                    'summary': gpt(prompt).strip()
+                }
+                
+                results.append(a)
         return results
 
     data = process(args.query)
